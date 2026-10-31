@@ -102,11 +102,9 @@ cargo build --release
 .\target\release\sniptool.exe
 ```
 
-改了 `tools/make_icons.py` 之后重新生成图标：
-
-```powershell
-python tools/make_icons.py
-```
+图标是直接提交进仓库的构建输入（`assets/app.ico` 加两套单色托盘版），
+没有「生成图标」这一步。要改就用你自己的工具改 `.ico`，再让 `assets/app.rc`
+指向它，下次构建 `build.rs` 会自动带进去。
 
 ## 测试
 
@@ -114,17 +112,10 @@ python tools/make_icons.py
 cargo test     # 12 个无头单测：热键解析、配置往返、文件名解析
 ```
 
-集成测试是 `tools/` 下的 PowerShell 脚本，驱动真实二进制、注入鼠标键盘，
-**会短暂接管屏幕**：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\spike5-smoke.ps1    # 16 项行为断言
-powershell -ExecutionPolicy Bypass -File tools\focus-keys.ps1      # 真实按键：Enter / Esc / 焦点
-powershell -ExecutionPolicy Bypass -File tools\spike5-ghost.ps1    # 重绘残留的像素级回归
-powershell -ExecutionPolicy Bypass -File tools\settings-toggle.ps1 # 开关 → 配置 → 注册表 往返
-```
-
-每个脚本都会备份并还原它碰过的 `config.ini` 和注册表项。
+界面部分（选区几何、热键、剪贴板、重绘残留）是用一套 PowerShell 脚本驱动真实
+二进制、注入鼠标键盘验证的。那套脚本**不在本仓库里**：它会移动鼠标、接管屏幕好几秒、
+并临时写入 `HKCU` 和 `%APPDATA%`。把一个会改写陌生人启动项的东西打包发布不合适，
+所以它留在仓库之外。
 
 ## 几个不显然的设计
 

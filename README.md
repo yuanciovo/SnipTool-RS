@@ -119,11 +119,10 @@ cargo build --release
 Cross-compiling from Linux with the `gnu` toolchain is not supported (the resource
 step and some `windows-sys` bindings assume MSVC).
 
-Regenerate the icons after editing `tools/make_icons.py`:
-
-```powershell
-python tools/make_icons.py   # writes assets/app.ico + tray-dark/light.ico
-```
+The icons are committed as build inputs (`assets/app.ico` plus the two monochrome
+tray variants) — there is no icon build step. To change one, edit the `.ico` with
+your own tool and point `assets/app.rc` at it; `build.rs` picks it up on the next
+build.
 
 ## Test
 
@@ -131,18 +130,12 @@ python tools/make_icons.py   # writes assets/app.ico + tray-dark/light.ico
 cargo test          # 12 headless unit tests: hotkey parsing, config round-trip, filename parsing
 ```
 
-Integration tests are PowerShell scripts under `tools/`. They drive the real
-binary with synthetic mouse and keyboard input, and they **take over the screen
-for a few seconds**:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\spike5-smoke.ps1   # 16 behaviour assertions
-powershell -ExecutionPolicy Bypass -File tools\focus-keys.ps1     # real keybd_event: Enter / Esc / focus
-powershell -ExecutionPolicy Bypass -File tools\spike5-ghost.ps1   # pixel-diff regression for repaint artefacts
-powershell -ExecutionPolicy Bypass -File tools\settings-toggle.ps1 # toggle -> config -> registry round trip
-```
-
-Each script backs up and restores `config.ini` and the registry value it touches.
+The UI side (overlay geometry, hotkeys, clipboard, repaint artefacts) was verified
+with a PowerShell harness that drives the real binary through synthetic mouse and
+keyboard input. That harness is **not part of this repository**: it moves the
+mouse, takes over the screen for several seconds, and temporarily writes to
+`HKCU` and `%APPDATA%`. Shipping something that rewrites a stranger's startup
+entries is not worth it, so it stays out of the published tree.
 
 ## How it works
 

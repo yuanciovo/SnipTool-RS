@@ -1,8 +1,5 @@
 /target
 
-# 本地 AI 助手的工作记录，不属于项目源码
-.workbuddy/
-
 # 编辑器 / 系统垃圾
 *.pdb
 *.ilk
@@ -11,5 +8,5 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# 由 tools/make_icons.py 生成（preview.png 保留，作为图标光学补偿的记录）
+# 分尺寸预览是生成物；preview.png 保留，作为图标光学补偿的记录
 assets/icons/app-*.png
