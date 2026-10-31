@@ -1,5 +1,20 @@
-# probe: (a) does the settings window survive losing focus?
-#        (b) does a REAL Enter key confirm a frozen capture?
+# Focus + real-keyboard regression test.
+#
+# Why a separate script from spike5-smoke.ps1: that one sends WM_KEYDOWN with
+# PostMessage, which delivers the message straight to the window and therefore
+# proves NOTHING about focus. Every keyboard test written that way was green
+# while Enter/Esc were actually broken, because the overlay had never been given
+# the foreground. This script uses keybd_event, i.e. the real input path, and it
+# also records whether the overlay owns the foreground at that moment.
+#
+# Checks:
+#   (a) the settings window survives losing focus (it must NOT self-destruct)
+#   (b) Esc cancels a frozen capture before any mouse button was pressed
+#   (c) a real Enter confirms a frozen capture
+#   (d) a real Esc cancels a pending one
+#
+# Takes over the screen for a few seconds and kills any running sniptool.
+# ASCII-only on purpose (PS 5.1 mis-decodes BOM-less non-ASCII .ps1).
 param()
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +47,17 @@ function Move-To([int]$x, [int]$y) {
     [Pb.Native]::mouse_event(($MOVE -bor $ABS), [int]($x * 65535 / ($b.Width - 1)), [int]($y * 65535 / ($b.Height - 1)), 0, [System.IntPtr]::Zero)
     Start-Sleep -Milliseconds 60
 }
+# Waits until $h owns the foreground. Returns True/False instead of guessing:
+# pressing a key while another app owns the focus proves nothing, and reporting
+# that as "Enter does nothing" hides which of the two actually broke.
+function Wait-Foreground([System.IntPtr]$H, [int]$TimeoutMs = 1200) {
+    for ($i = 0; $i -lt [int]($TimeoutMs / 50); $i++) {
+        if ([Pb.Native]::GetForegroundWindow() -eq $H) { return $true }
+        Start-Sleep -Milliseconds 50
+    }
+    return $false
+}
+
 function Click-At([int]$x, [int]$y) {
     Move-To $x $y
     [Pb.Native]::mouse_event($LDOWN, 0, 0, 0, [System.IntPtr]::Zero)
@@ -41,9 +67,19 @@ function Click-At([int]$x, [int]$y) {
 }
 
 $exe = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\sniptool.exe"
+if (-not (Test-Path $exe)) { throw "not found: $exe" }
+
+$proc = $null
+# a half-finished run can leave the mask covering the screen; always clean up
+trap {
+    Write-Host ("ABORTED: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if ($null -ne $script:proc) { Stop-Process -Id $script:proc.Id -Force -ErrorAction SilentlyContinue }
+    exit 1
+}
+
 Get-Process -Name sniptool -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400
-$p = Start-Process $exe -PassThru
+$proc = Start-Process $exe -PassThru
 Start-Sleep -Milliseconds 1300
 $tray = [Pb.Native]::FindWindowW("MySnipTool.TrayHost", [System.IntPtr]::Zero)
 
@@ -103,7 +139,11 @@ $bar = [Pb.Native]::FindWindowW("MySnipTool.Toolbar", [System.IntPtr]::Zero) -ne
 $fg2 = [Pb.Native]::GetForegroundWindow()
 Write-Output ("pending={0} toolbar={1} foreground==overlay: {2}" -f $pending, $bar, ($fg2 -eq $ov))
 
-# real Enter
+# real Enter. Only meaningful once the overlay owns the foreground; if it does
+# not, say so explicitly instead of blaming the key handler.
+if (-not (Wait-Foreground $ov)) {
+    Write-Output "FAIL  overlay never got the foreground (Enter/Esc cannot reach it)"
+}
 [Pb.Native]::keybd_event(0x0D, 0, 0, [System.IntPtr]::Zero)
 Start-Sleep -Milliseconds 60
 [Pb.Native]::keybd_event(0x0D, 0, 2, [System.IntPtr]::Zero)
@@ -126,6 +166,7 @@ if ($ov2 -ne [System.IntPtr]::Zero) {
     }
     [Pb.Native]::mouse_event($LUP, 0, 0, 0, [System.IntPtr]::Zero)
     Start-Sleep -Milliseconds 600
+    [void](Wait-Foreground $ov2)
     [Pb.Native]::keybd_event(0x1B, 0, 0, [System.IntPtr]::Zero)
     Start-Sleep -Milliseconds 60
     [Pb.Native]::keybd_event(0x1B, 0, 2, [System.IntPtr]::Zero)
@@ -134,4 +175,4 @@ if ($ov2 -ne [System.IntPtr]::Zero) {
     if ($gone) { Write-Output "PASS  real Esc cancels" } else { Write-Output "FAIL  real Esc does nothing" }
 }
 
-Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue

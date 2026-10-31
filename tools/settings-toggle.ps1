@@ -1,7 +1,27 @@
-# temporary: toggle -> save -> config/registry round trip
+# Settings round trip: toggle -> save -> config.ini + HKCU Run value.
+#
+# Proves the only self-drawn control that touches system state works end to end,
+# in BOTH directions:
+#   round 1  toggle OFF -> save -> config says autostart=0 AND the Run value is gone
+#   round 2  toggle ON  -> save -> config says autostart=1 AND the Run value is back
+#
+# It clicks the real pixels (the whole window is GDI-drawn, there is no button
+# control to send a message to), so it depends on the layout constants in
+# src/ui/settings.rs: toggle at window-local (414,436), save at (408,518).
+#
+# Before touching anything it snapshots config.ini and the Run value, and it
+# restores BOTH in a finally block -- including the "did not exist before" case,
+# which means deleting the file / the registry value again. A previous version
+# only restored what had existed, which left a permanent startup entry pointing
+# at target\release\sniptool.exe on every machine that ran the test.
+#
+# Takes over the screen for a few seconds and kills any running sniptool.
+# ASCII-only on purpose (PS 5.1 mis-decodes BOM-less non-ASCII .ps1).
+
 param()
 
 $ErrorActionPreference = "Stop"
+
 if (-not ("Tt.Native" -as [type])) {
     Add-Type -Namespace Tt -Name Native -MemberDefinition @"
 [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
@@ -16,6 +36,7 @@ public struct RECT { public int Left, Top, Right, Bottom; }
 "@
 }
 Add-Type -AssemblyName System.Windows.Forms
+
 $MOVE = 0x0001; $ABS = 0x8000; $LDOWN = 0x0002; $LUP = 0x0004
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
@@ -31,71 +52,110 @@ function Click-At([int]$x, [int]$y) {
     Start-Sleep -Milliseconds 200
 }
 
+# ---- snapshot ------------------------------------------------------------
 $cfg = Join-Path $env:APPDATA "MySnipTool\config.ini"
 $bak = "$cfg.tbak"
-$had = Test-Path $cfg
-if ($had) { Copy-Item $cfg $bak -Force }
+$hadCfg = Test-Path $cfg
+if ($hadCfg) { Copy-Item $cfg $bak -Force }
+
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $prevRun = (Get-ItemProperty -Path $runKey -Name "MySnipTool" -ErrorAction SilentlyContinue).MySnipTool
+$hadRun = $null -ne $prevRun
 
+$proc = $null
+function Restore-State {
+    if ($null -ne $script:proc) {
+        Stop-Process -Id $script:proc.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300
+    }
+    if ($hadCfg) {
+        if (Test-Path $bak) { Copy-Item $bak $cfg -Force; Remove-Item $bak -Force }
+    } else {
+        # there was no config before: remove the one this test created, so the
+        # next start goes back to the built-in defaults
+        Remove-Item $cfg -Force -ErrorAction SilentlyContinue
+    }
+    if ($hadRun) {
+        Set-ItemProperty -Path $runKey -Name "MySnipTool" -Value $prevRun
+    } else {
+        # there was no startup entry before: remove the one this test created
+        Remove-ItemProperty -Path $runKey -Name "MySnipTool" -ErrorAction SilentlyContinue
+    }
+    Write-Host "restored config and Run value"
+}
+
+trap {
+    Write-Host ("ABORTED: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Restore-State
+    exit 1
+}
+
+# ---- run -----------------------------------------------------------------
 $exe = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\sniptool.exe"
+if (-not (Test-Path $exe)) { throw "not found: $exe" }
+
 Get-Process -Name sniptool -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400
-$p = Start-Process $exe -PassThru
+$proc = Start-Process $exe -PassThru
 Start-Sleep -Milliseconds 1300
 
-$host_ = [Tt.Native]::FindWindowW("MySnipTool.TrayHost", [System.IntPtr]::Zero)
-[void][Tt.Native]::PostMessageW($host_, 0x0111, [System.IntPtr]1007, [System.IntPtr]::Zero)
-Start-Sleep -Milliseconds 900
-$w = [Tt.Native]::FindWindowW("MySnipTool.Settings", [System.IntPtr]::Zero)
-if ($w -eq [System.IntPtr]::Zero) { Write-Output "no window"; exit 1 }
+function Open-Settings {
+    $hostWin = [Tt.Native]::FindWindowW("MySnipTool.TrayHost", [System.IntPtr]::Zero)
+    if ($hostWin -eq [System.IntPtr]::Zero) { throw "tray host not found" }
+    [void][Tt.Native]::PostMessageW($hostWin, 0x0111, [System.IntPtr]1007, [System.IntPtr]::Zero)
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
+        $w = [Tt.Native]::FindWindowW("MySnipTool.Settings", [System.IntPtr]::Zero)
+        if ($w -ne [System.IntPtr]::Zero) { return $w }
+    }
+    throw "settings window did not open"
+}
+
+# toggle, then save; returns nothing, throws if the window never closes
+function Toggle-And-Save([System.IntPtr]$Win) {
+    $r = New-Object Tt.Native+RECT
+    [void][Tt.Native]::GetWindowRect($Win, [ref]$r)
+    Click-At ($r.Left + 414) ($r.Top + 436)     # the sliding toggle
+    Start-Sleep -Milliseconds 400
+    Click-At ($r.Left + 408) ($r.Top + 518)     # the blue save button
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
+        if ([Tt.Native]::FindWindowW("MySnipTool.Settings", [System.IntPtr]::Zero) -eq [System.IntPtr]::Zero) { return }
+    }
+    throw "save button did not close the window (click missed?)"
+}
+
+$w = Open-Settings
 $r = New-Object Tt.Native+RECT
 [void][Tt.Native]::GetWindowRect($w, [ref]$r)
-
-Write-Output ("window rect {0},{1} {2}x{3}" -f $r.Left, $r.Top, ($r.Right-$r.Left), ($r.Bottom-$r.Top))
+Write-Host ("window rect {0},{1} {2}x{3}" -f $r.Left, $r.Top, ($r.Right - $r.Left), ($r.Bottom - $r.Top))
 $before = if (Test-Path $cfg) { (Select-String -Path $cfg -Pattern "^autostart=").Line } else { "none" }
-Write-Output "config before : $before"
-Write-Output ("run key before: {0}" -f $(if ($prevRun) { "present" } else { "absent" }))
+Write-Host "config before : $before"
+Write-Host ("run key before: {0}" -f $(if ($prevRun) { "present" } else { "absent" }))
 
-# toggle at window-local (414,436), then save at (408,518)
-Click-At ($r.Left + 414) ($r.Top + 436)
-Start-Sleep -Milliseconds 400
-$alive = [Tt.Native]::FindWindowW("MySnipTool.Settings", [System.IntPtr]::Zero) -ne [System.IntPtr]::Zero
-Write-Output ("after toggle click: window alive={0}" -f $alive)
-Click-At ($r.Left + 408) ($r.Top + 518)
-Start-Sleep -Milliseconds 1200
-$stillOpen = [Tt.Native]::FindWindowW("MySnipTool.Settings", [System.IntPtr]::Zero) -ne [System.IntPtr]::Zero
-Write-Output ("after save click:   window alive={0}" -f $stillOpen)
-
+# ---- round 1: off --------------------------------------------------------
+Toggle-And-Save $w
 $after = if (Test-Path $cfg) { (Select-String -Path $cfg -Pattern "^autostart=").Line } else { "none" }
 $runAfter = (Get-ItemProperty -Path $runKey -Name "MySnipTool" -ErrorAction SilentlyContinue).MySnipTool
-Write-Output "config after  : $after"
-Write-Output ("run key after : {0}" -f $(if ($runAfter) { "present" } else { "absent" }))
-
-$ok = ($after -match "autostart=0") -and ($null -eq $runAfter)
-if ($ok) { Write-Output "PASS  toggle off -> config=0 and Run value removed" }
-else { Write-Output "FAIL  toggle off did not persist" }
-
-# round 2: turn it back on
-[void][Tt.Native]::PostMessageW($host_, 0x0111, [System.IntPtr]1007, [System.IntPtr]::Zero)
-Start-Sleep -Milliseconds 900
-$w = [Tt.Native]::FindWindowW("MySnipTool.Settings", [System.IntPtr]::Zero)
-if ($w -ne [System.IntPtr]::Zero) {
-    [void][Tt.Native]::GetWindowRect($w, [ref]$r)
-    Click-At ($r.Left + 414) ($r.Top + 436)
-    Start-Sleep -Milliseconds 400
-    Click-At ($r.Left + 408) ($r.Top + 518)
-    Start-Sleep -Milliseconds 1200
+Write-Host "config after  : $after"
+Write-Host ("run key after : {0}" -f $(if ($runAfter) { "present" } else { "absent" }))
+if (($after -match "autostart=0") -and ($null -eq $runAfter)) {
+    Write-Host "PASS  toggle off -> config=0 and Run value removed"
+} else {
+    Write-Host "FAIL  toggle off did not persist" -ForegroundColor Red
 }
+
+# ---- round 2: back on ----------------------------------------------------
+$w = Open-Settings
+Toggle-And-Save $w
 $cfg2 = (Select-String -Path $cfg -Pattern "^autostart=").Line
 $run2 = (Get-ItemProperty -Path $runKey -Name "MySnipTool" -ErrorAction SilentlyContinue).MySnipTool
-Write-Output "config round2 : $cfg2"
-Write-Output ("run key round2: {0}" -f $(if ($run2) { "present" } else { "absent" }))
-if (($cfg2 -match "autostart=1") -and ($null -ne $run2)) { Write-Output "PASS  toggle on -> config=1 and Run value written" }
-else { Write-Output "FAIL  toggle on did not persist" }
+Write-Host "config round2 : $cfg2"
+Write-Host ("run key round2: {0}" -f $(if ($run2) { "present" } else { "absent" }))
+if (($cfg2 -match "autostart=1") -and ($null -ne $run2)) {
+    Write-Host "PASS  toggle on -> config=1 and Run value written"
+} else {
+    Write-Host "FAIL  toggle on did not persist" -ForegroundColor Red
+}
 
-Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 400
-if ($had) { Copy-Item $bak $cfg -Force; Remove-Item $bak -Force }
-if ($null -ne $prevRun) { Set-ItemProperty -Path $runKey -Name "MySnipTool" -Value $prevRun }
-Write-Output "restored"
+Restore-State

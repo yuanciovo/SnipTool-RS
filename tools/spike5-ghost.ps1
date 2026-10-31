@@ -16,6 +16,11 @@
 #
 # A and B must be pixel identical. Any difference is stale paint left behind.
 #
+# NOTE: this captures the FULL SCREEN into %TEMP%\ghost5 twice. Those pngs are
+# whatever is on your desktop at that moment -- they never leave the machine,
+# and they are deleted when the run passes (kept when it fails, so you can look
+# at the residue; the path is printed at the end).
+#
 # ASCII-only on purpose (PS 5.1 mis-decodes BOM-less non-ASCII .ps1).
 
 param(
@@ -89,6 +94,16 @@ if ([string]::IsNullOrWhiteSpace($ExePath)) {
     $ExePath = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\sniptool.exe"
 }
 if (-not (Test-Path $ExePath)) { throw "not found: $ExePath" }
+
+$proc = $null
+# if anything throws (overlay never opened, tray host missing) the overlay may be
+# covering the whole screen -- always take the process down, or the tester has to
+# press Esc to get their desktop back
+trap {
+    Write-Host ("ABORTED: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if ($null -ne $script:proc) { Stop-Process -Id $script:proc.Id -Force -ErrorAction SilentlyContinue }
+    exit 1
+}
 
 Get-Process -Name "sniptool" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 400
@@ -164,7 +179,8 @@ $ic = [System.Drawing.Image]::FromFile($c)
 $ba = New-Object System.Drawing.Bitmap $ia
 $bc = New-Object System.Drawing.Bitmap $ic
 
-if ((Get-Hash $ba) -eq (Get-Hash $bc)) {
+$passed = ((Get-Hash $ba) -eq (Get-Hash $bc))
+if ($passed) {
     Write-Host "PASS  no stale paint after shrink (pixel identical)" -ForegroundColor Green
 } else {
     # coarse 4x4 block scan just to report where the residue is
@@ -185,6 +201,11 @@ if ((Get-Hash $ba) -eq (Get-Hash $bc)) {
     Write-Host ("FAIL  stale paint: {0} blocks differ, bbox x {1}..{2} y {3}..{4}" -f $blocks, $minX, $maxX, $minY, $maxY) -ForegroundColor Red
 }
 $ba.Dispose(); $bc.Dispose(); $ia.Dispose(); $ic.Dispose()
-Write-Host ("INFO  shots: {0}" -f $tmp) -ForegroundColor DarkGray
+if ($passed) {
+    # full-screen captures of the tester's desktop: do not leave them lying around
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host ("INFO  shots kept for inspection: {0}" -f $tmp) -ForegroundColor DarkGray
+}
 
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue

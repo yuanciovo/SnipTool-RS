@@ -7,15 +7,17 @@
   - 两笔：左上角交叉、右下角交叉，右上和左下是 90° 圆角
 
 原图 7.8% 的笔画在 16px 下只有 1.25px —— 缩放后会糊成一团。
-所以这里做**光学补偿**：尺寸越小笔画占比越大，16px 用 17.5%（约 2.8px）。
+所以这里做**光学补偿**：尺寸越小笔画占比越大（16px 用 15% ≈ 2.4px，32px 用 13.5%，
+64px 起逐步回到原比例 9.3%）。加粗过头会把中间的空洞填死，15% 是实测的甜点。
 
 输出：
-  assets/app.ico          16/20/24/32/40/48/64/96/128/256
+  assets/app.ico          16/20/24/32/40/48/64/256（96/128 故意不做：+105KB 不值）
   assets/tray-dark.ico    深色字形（浅色任务栏用）16/20/24/32
   assets/tray-light.ico   白色字形（深色任务栏用）16/20/24/32
   assets/icons/preview.png  一排尺寸预览，肉眼验货用
 """
 
+import math
 import os
 import struct
 from PIL import Image, ImageDraw
@@ -65,7 +67,7 @@ def render(size: int, color, ss: int = 8) -> Image.Image:
         t = i / steps
         ang = (-90 + 90 * t) * 3.141592653589793 / 180.0
         cx, cy = p(C_R - r, C_T + r)
-        a.append((cx + r * box * _cos(ang), cy + r * box * _sin(ang)))
+        a.append((cx + r * box * math.cos(ang), cy + r * box * math.sin(ang)))
     a.append(p(C_R, 1.0))
 
     # 路径 B：左竖 → 左下圆角 → 下横
@@ -74,7 +76,7 @@ def render(size: int, color, ss: int = 8) -> Image.Image:
         t = i / steps
         ang = (180 - 90 * t) * 3.141592653589793 / 180.0
         cx, cy = p(C_L + r, C_B - r)
-        b.append((cx + r * box * _cos(ang), cy + r * box * _sin(ang)))
+        b.append((cx + r * box * math.cos(ang), cy + r * box * math.sin(ang)))
     b.append(p(1.0, C_B))
 
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
@@ -87,18 +89,6 @@ def render(size: int, color, ss: int = 8) -> Image.Image:
             )
 
     return img.resize((size, size), Image.LANCZOS)
-
-
-def _cos(a):
-    import math
-
-    return math.cos(a)
-
-
-def _sin(a):
-    import math
-
-    return math.sin(a)
 
 
 def bmp_entry(img: Image.Image) -> bytes:

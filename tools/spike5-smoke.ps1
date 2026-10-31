@@ -137,6 +137,36 @@ $hadCfg = Test-Path $cfgPath
 if ($hadCfg) { Copy-Item $cfgPath $cfgBak -Force }
 $prevRun = (Get-ItemProperty -Path $runKey -Name $valueName -ErrorAction SilentlyContinue).$valueName
 
+# Restores both sides of what this test touches. Note the two "did not exist
+# before" branches: they DELETE, because leaving a config.ini or a startup entry
+# behind changes the tester's machine for good (a Run value pointing at
+# target\release\sniptool.exe survives cargo clean and fires at every logon).
+function Restore-State {
+    if ($null -ne $script:proc) {
+        Stop-Process -Id $script:proc.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 400
+    }
+    if ($hadCfg) {
+        if (Test-Path $cfgBak) { Copy-Item $cfgBak $cfgPath -Force; Remove-Item $cfgBak -Force }
+    } else {
+        Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $prevRun) {
+        Set-ItemProperty -Path $runKey -Name $valueName -Value $prevRun
+    } else {
+        Remove-ItemProperty -Path $runKey -Name $valueName -ErrorAction SilentlyContinue
+    }
+    Write-Host "restored config and Run value"
+}
+
+# any terminating error (assertion blown inside a helper, window never opened,
+# process crashed) still has to put the machine back the way it was
+trap {
+    Write-Host ("ABORTED: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Restore-State
+    exit 1
+}
+
 # ---- seed a config with a NON-default history combo ----------------------
 # If the app silently fell back to defaults, the save round-trip below would
 # rewrite it as Alt+V and this assertion would catch it.
@@ -299,7 +329,8 @@ Start-Sleep -Milliseconds 800
 $gdiB = Get-Gdi $proc.Id
 Show-Result "settings leaks no GDI" ($gdiB -le $gdiA) ("before={0} after={1}" -f $gdiA, $gdiB)
 
-$cfgText = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw } else { "" }$keepCombo = $cfgText -match "history=Alt\+Shift\+V"
+$cfgText = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw } else { "" }
+$keepCombo = $cfgText -match "history=Alt\+Shift\+V"
 Show-Result "config survives save round-trip" $keepCombo $(($cfgText -split "`n" | Where-Object { $_ -match "^history=" }) -join "")
 $keepRet = $cfgText -match "retention_hours=2"
 Show-Result "retention survives save" $keepRet $(($cfgText -split "`n" | Where-Object { $_ -match "^retention_hours=" }) -join "")
@@ -312,22 +343,12 @@ Show-Result "Run key points at the exe" $runOk $(if ($runValue) { $runValue } el
 Write-Host ("INFO  gdi={0} ws={1} MB" -f (Get-Gdi $proc.Id), (Get-WsMb $proc.Id)) -ForegroundColor Cyan
 
 # ---- restore ------------------------------------------------------------
-if (-not $KeepRunning) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 400
-}
-
-if ($hadCfg) {
-    Copy-Item $cfgBak $cfgPath -Force
-    Remove-Item $cfgBak -Force
+# -KeepRunning leaves the app up for poking at, but the config and the Run
+# value are still restored: they are the machine-level state, not the process.
+if ($KeepRunning) {
+    $script:proc = $null
+    Restore-State
+    Write-Host "sniptool left running (pid $($proc.Id))"
 } else {
-    # there was no config before: drop ours so the next start re-creates
-    # the built-in defaults instead of keeping the test combos
-    Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
+    Restore-State
 }
-if ($null -ne $prevRun) {
-    Set-ItemProperty -Path $runKey -Name $valueName -Value $prevRun
-} else {
-    Remove-ItemProperty -Path $runKey -Name $valueName -ErrorAction SilentlyContinue
-}
-Write-Host "restored config and Run value"
