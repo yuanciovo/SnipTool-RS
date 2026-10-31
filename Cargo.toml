@@ -1,0 +1,54 @@
+[package]
+name = "sniptool"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A 0.5 MB screenshot tool for Windows - pure Rust + Win32, no runtime, GDI-drawn UI"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/yuanciovo/SnipTool-RS"
+keywords = ["screenshot", "win32", "tray", "capture", "lightweight"]
+categories = ["gui", "os::windows-apis"]
+
+[[bin]]
+name = "sniptool"
+path = "src/main.rs"
+
+[dependencies]
+# 只要 PNG 编码器，其余格式全部关掉（tiff/webp/gif 会拖进来一堆依赖）。
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+# 零依赖、裸 C 签名。feature 精确裁剪，多开一个都会拖慢编译。
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",              # HWND/HINSTANCE/POINT/RECT/FILETIME
+    "Win32_UI_WindowsAndMessaging",  # 窗口/消息/菜单/托盘回调
+    "Win32_UI_Shell",                # Shell_NotifyIconW
+    "Win32_UI_HiDpi",                # 进程 DPI 感知
+    "Win32_System_LibraryLoader",    # GetModuleHandleW
+    # WNDCLASSW / RegisterClassW 被归到这里：WNDCLASSW 字段含 HBRUSH/HICON/HCURSOR。
+    # 少它的症状：UnregisterClassW 找得到，RegisterClassW 找不到。
+    # BitBlt/StretchBlt/DIB/字体也在这里。
+    "Win32_Graphics_Gdi",
+    # RegisterHotKey / MOD_* / VK_* / SetCapture / SetFocus（不在 WindowsAndMessaging）
+    "Win32_UI_Input_KeyboardAndMouse",
+    # GetLocalTime / GetSystemTimeAsFileTime（文件命名与清理判龄）
+    "Win32_System_SystemInformation",
+    # FindFirstFileW / FindNextFileW / DeleteFileW（清理只读元数据）
+    "Win32_Storage_FileSystem",
+    # 剪贴板：OpenClipboard / SetClipboardData / RegisterClipboardFormatW
+    "Win32_System_DataExchange",
+    # 剪贴板用的 HGLOBAL + SetProcessWorkingSetSize（截图后裁剪工作集）
+    "Win32_System_Memory",
+    # GetCurrentProcess
+    "Win32_System_Threading",
+    # 开机自启：HKCU\...\Run（RegOpenKeyExW / RegSetValueExW / RegDeleteValueW）
+    "Win32_System_Registry",
+    # 设置窗口的 Windows 11 系统级平滑圆角（DwmSetWindowAttribute）
+    "Win32_Graphics_Dwm",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

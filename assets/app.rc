@@ -1,0 +1,40 @@
+// MySnipTool 资源脚本
+// 注意：整个文件只用 ASCII。rc.exe 对无 BOM 的 UTF-8 处理不可靠，
+// 而 exe 属性的显示语言本来就该是英文（开源项目面向国际用户）。
+//
+// 1 = 应用主图标（Explorer / 任务栏 / Alt+Tab）
+// 2 = 托盘图标·深色字形（浅色任务栏用）
+// 3 = 托盘图标·白色字形（深色任务栏用）
+
+1 ICON "app.ico"
+2 ICON "tray-dark.ico"
+3 ICON "tray-light.ico"
+
+1 VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "MySnipTool"
+            VALUE "FileDescription",  "MySnipTool - lightweight screenshot tool"
+            VALUE "FileVersion",      "1.0.0"
+            VALUE "InternalName",     "sniptool"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 MySnipTool contributors. MIT License."
+            VALUE "OriginalFilename", "sniptool.exe"
+            VALUE "ProductName",      "MySnipTool"
+            VALUE "ProductVersion",   "1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

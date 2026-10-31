@@ -1,0 +1,62 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --release -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Report size
+        shell: pwsh
+        run: |
+          $f = Get-Item target/release/sniptool.exe
+          "sniptool.exe = {0:N0} bytes ({1:N0} KB)" -f $f.Length, ($f.Length / 1KB) |
+            Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sniptool-windows-x64
+          path: target/release/sniptool.exe
+          if-no-files-found: error
+
+      # Tag push (v1.0.0) publishes the binary so users do not need a toolchain.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            target/release/sniptool.exe `
+            --title "MySnipTool $env:GITHUB_REF_NAME" `
+            --generate-notes
